@@ -1,0 +1,119 @@
+# =============================================================================
+# docker-compose.yml — Full AutoDebug Stack
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # PostgreSQL — Persistent storage for tasks, logs, fix history
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: autodebug-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-autodebug}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-autodebug}
+      POSTGRES_DB: ${POSTGRES_DB:-autodebug}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U autodebug"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Redis — Task queue + ephemeral agent memory
+  # ---------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: autodebug-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Backend — FastAPI application
+  # ---------------------------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: autodebug-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autodebug}:${POSTGRES_PASSWORD:-autodebug}@postgres:5432/${POSTGRES_DB:-autodebug}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # DinD: spawn sandbox containers
+      - workspace_data:/workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ---------------------------------------------------------------------------
+  # Worker — Background task processor
+  # ---------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: autodebug-worker
+    restart: unless-stopped
+    command: python -m backend.worker
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-autodebug}:${POSTGRES_PASSWORD:-autodebug}@postgres:5432/${POSTGRES_DB:-autodebug}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - workspace_data:/workspace
+    depends_on:
+      - backend
+      - postgres
+      - redis
+
+  # ---------------------------------------------------------------------------
+  # Frontend — React dashboard
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: frontend
+      dockerfile: Dockerfile
+    container_name: autodebug-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000
+    depends_on:
+      - backend
+
+networks:
+  default:
+    name: autodebug-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  workspace_data:

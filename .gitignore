@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Project
+*.log
+.DS_Store
+
+# Frontend
+node_modules/
+dist/
+build/
+.eslintcache
+
+# Docker
+.docker/
